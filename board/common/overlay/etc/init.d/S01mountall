@@ -1,12 +1,12 @@
 #!/bin/bash
 
-test -n "$os_version" || source /etc/init.d/base
+test -n "${OS_VERSION}" || source /etc/init.d/base
 
 mount_fs() {
     msg_begin "Mounting filesystems"
     /bin/mount -T /etc/fstab.disk -a &&
     /bin/mount -T /etc/fstab.extra -a &&
-    if [ -r /data/etc/fstab.user ]; then /bin/mount -T /data/etc/fstab.user -a; fi
+    if [[ -r /data/etc/fstab.user ]]; then /bin/mount -T /data/etc/fstab.user -a; fi
 
     test $? == 0 && msg_done || msg_fail
 }
@@ -22,15 +22,17 @@ remount_rw() {
 }
 
 mk_tty_login() {
-    test -z "$os_tty_login" && os_tty_login=tty1
-    ln -sf /dev/$os_tty_login /dev/ttylogin
+    test -z "${OS_TTY_LOGIN}" && OS_TTY_LOGIN=tty1
+    ln -sf /dev/${OS_TTY_LOGIN} /dev/ttylogin
 }
 
 case "$1" in
     start)
         mount_fs
-        test -n "$os_debug" || source /etc/init.d/conf
-        test "$os_debug" == "true" && remount_rw
+
+        # we need to source conf again, now that /data is available
+        source /etc/init.d/os_conf
+        test "${OS_DEBUG}" == "true" && remount_rw
         mk_tty_login
         ;;
 

@@ -58,7 +58,8 @@ AWB_CHOICES = [
     ('fluorescent', 'Fluorescent'),
     ('incandescent', 'Incandescent'),
     ('flash', 'Flash'),
-    ('horizon', 'Horizon')
+    ('horizon', 'Horizon'),
+    ('greyworld', 'Greyworld')
 ]
 
 METERING_CHOICES = [
@@ -130,6 +131,11 @@ ROTATION_CHOICES = [
     ('270', '270&deg;')
 ]
 
+PROTO_CHOICES = [
+    ('mjpeg', 'MJPEG'),
+    ('rtsp', 'RTSP'),
+]
+
 AUTH_CHOICES = [
     ('disabled', 'Disabled'),
     ('basic', 'Basic'),
@@ -187,13 +193,13 @@ def _set_streameye_enabled(enabled):
         config._camera_ids_cache = []
         
         logging.debug('disabling all cameras in motion.conf')
-        cmd = 'sed -r -i "s/^thread (.*)/#thread \\1/" /data/etc/motion.conf &>/dev/null'
+        cmd = 'sed -r -i "s/^camera (.*)/#camera \\1/" /data/etc/motion.conf &>/dev/null'
         if os.system(cmd):
             logging.error('failed to disable cameras in motion.conf')
         
-        logging.debug('renaming thread files')
+        logging.debug('renaming camera files')
         for name in os.listdir(settings.CONF_PATH):
-            if re.match('^thread-\d+.conf$', name):
+            if re.match('^camera-\d+.conf$', name):
                 os.rename(os.path.join(settings.CONF_PATH, name), os.path.join(settings.CONF_PATH, name + '.bak'))
 
         logging.debug('adding simple mjpeg camera')
@@ -231,9 +237,9 @@ def _set_streameye_enabled(enabled):
             if camera_config.get('@proto') == 'mjpeg':
                 config.rem_camera(camera_id)
 
-        logging.debug('renaming thread files')
+        logging.debug('renaming camera files')
         for name in os.listdir(settings.CONF_PATH):
-            if re.match('^thread-\d+.conf.bak$', name):
+            if re.match('^camera-\d+.conf.bak$', name):
                 os.rename(os.path.join(settings.CONF_PATH, name), os.path.join(settings.CONF_PATH, name[:-4]))
         
         _streameye_enabled = False
@@ -310,6 +316,7 @@ def _get_raspimjpeg_settings(camera_id):
         'hflip': False,
         'framerate': 15,
         'quality': 25,
+        'bitrate': 1000000,
         'zoomx': 0,
         'zoomy': 0,
         'zoomw': 100,
@@ -402,8 +409,10 @@ def _set_raspimjpeg_settings(camera_id, s):
 
 def _get_streameye_settings(camera_id):
     s = {
+        'seProto': 'mjpeg',
         'seAuthMode': 'disabled',
         'sePort': 8081,
+        'seRTSPPort': 554
     }
     
     if os.path.exists(STREAMEYE_CONF):
@@ -415,14 +424,23 @@ def _get_streameye_settings(camera_id):
                 if not line:
                     continue
 
-                m = re.findall('PORT="?(\d+)"?', line)
+                m = re.findall('^PORT="?(\d+)"?', line)
                 if m:
                     s['sePort'] = int(m[0])
                     continue
                     
-                m = re.findall('AUTH="?(\w+)"?', line)
+                m = re.findall('^RTSP_PORT="?(\d+)"?', line)
+                if m:
+                    s['seRTSPPort'] = int(m[0])
+                    continue
+
+                m = re.findall('^AUTH="?(\w+)"?', line)
                 if m:
                     s['seAuthMode'] = m[0]
+
+                m = re.findall('^PROTO="?(\w+)"?', line)
+                if m:
+                    s['seProto'] = m[0]
 
     return s
 
@@ -430,6 +448,7 @@ def _get_streameye_settings(camera_id):
 def _set_streameye_settings(camera_id, s):
     s = dict(s)
     s.setdefault('sePort', 8081)
+    s.setdefault('seRTSPPort', 554)
     s.setdefault('seAuthMode', 'disabled')
     
     main_config = config.get_main()
@@ -440,7 +459,9 @@ def _set_streameye_settings(camera_id, s):
     logging.debug('writing streameye settings to %s' % STREAMEYE_CONF)
     
     lines = [
+        'PROTO="%s"' % s['seProto'],
         'PORT="%s"' % s['sePort'],
+        'RTSP_PORT="%s"' % s['seRTSPPort'],
         'AUTH="%s"' % s['seAuthMode'],
         'CREDENTIALS="%s:%s:%s"' % (username, password, realm)
     ]
@@ -496,7 +517,6 @@ if _get_streameye_enabled():
         return {
             'type': 'html',
             'section': 'expertSettings',
-            'advanced': True,
             'get': lambda: '<a href="javascript:downloadFile(\'log/streameye/\');">streameye.log</a>',
         }
 
@@ -505,7 +525,6 @@ if _get_streameye_enabled():
         return {
             'type': 'html',
             'section': 'expertSettings',
-            'advanced': True,
             'get': lambda: '<a href="javascript:downloadFile(\'log/raspimjpeg/\');">raspimjpeg.log</a>',
         }
 
@@ -514,8 +533,7 @@ if _get_streameye_enabled():
 def streamEyeMainSeparator():
     return {
         'type': 'separator',
-        'section': 'expertSettings',
-        'advanced': True
+        'section': 'expertSettings'
     }
 
 
@@ -527,7 +545,6 @@ def streamEye():
                 'disabling motion detection, media files and all other advanced features (works only with the CSI camera)',
         'type': 'bool',
         'section': 'expertSettings',
-        'advanced': True,
         'reboot': True,
         'get': _get_streameye_enabled,
         'set': _set_streameye_enabled_deferred,
@@ -539,8 +556,7 @@ def streamEyeCameraSeparator1():
     return {
         'type': 'separator',
         'section': 'device',
-        'camera': True,
-        'advanced': True
+        'camera': True
     }
 
  
@@ -560,7 +576,6 @@ def seBrightness():
         'decimals': 0,
         'unit': '%',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -585,7 +600,6 @@ def seContrast():
         'decimals': 0,
         'unit': '%',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -610,7 +624,6 @@ def seSaturation():
         'decimals': 0,
         'unit': '%',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -635,7 +648,6 @@ def seSharpness():
         'decimals': 0,
         'unit': '%',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -650,8 +662,7 @@ def streamEyeCameraSeparator2():
     return {
         'type': 'separator',
         'section': 'device',
-        'camera': True,
-        'advanced': True
+        'camera': True
     }
 
  
@@ -666,7 +677,6 @@ def seResolution():
         'type': 'choices',
         'choices': RESOLUTION_CHOICES,
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -686,7 +696,6 @@ def seRotation():
         'type': 'choices',
         'choices': ROTATION_CHOICES,
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -705,7 +714,6 @@ def seVflip():
         'description': 'enable this to flip the captured image vertically',
         'type': 'bool',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -724,7 +732,6 @@ def seHflip():
         'description': 'enable this to flip the captured image horizontally',
         'type': 'bool',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -748,7 +755,6 @@ def seFramerate():
         'ticks': "1|5|10|15|20|25|30",
         'decimals': 0,
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -773,7 +779,27 @@ def seQuality():
         'decimals': 0,
         'unit': '%',
         'section': 'device',
-        'advanced': True,
+        'camera': True,
+        'required': True,
+        'get': _get_raspimjpeg_settings,
+        'set': _set_raspimjpeg_settings,
+        'get_set_dict': True
+    }
+
+
+@additional_config
+def seBitrate():
+    if not _get_streameye_enabled():
+        return None
+
+    return {
+        'label': 'Bitrate',
+        'description': 'sets the RTSP stream bitrate (higher values produce a better stream quality but require more storage space and bandwidth)',
+        'type': 'number',
+        'min': 0,
+        'max': 100000000,
+        'unit': 'bps',
+        'section': 'device',
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -798,7 +824,6 @@ def seZoomx():
         'decimals': 0,
         'unit': '%',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -823,7 +848,6 @@ def seZoomy():
         'decimals': 0,
         'unit': '%',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -848,7 +872,6 @@ def seZoomw():
         'decimals': 0,
         'unit': '%',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -873,7 +896,6 @@ def seZoomh():
         'decimals': 0,
         'unit': '%',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -892,7 +914,6 @@ def sePreview():
         'description': 'enable this if you want to see the preview on an HDMI-connected monitor',
         'type': 'bool',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'get': _get_raspimjpeg_settings,
         'set': _set_raspimjpeg_settings,
@@ -905,8 +926,7 @@ def streamEyeCameraSeparator3():
     return {
         'type': 'separator',
         'section': 'device',
-        'camera': True,
-        'advanced': True
+        'camera': True
     }
 
  
@@ -926,7 +946,6 @@ def seIso():
         'decimals': 0,
         'unit': '',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -948,7 +967,6 @@ def seShutter():
         'max': 6000000,
         'unit': 'microseconds',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -962,8 +980,7 @@ def streamEyeCameraSeparator4():
     return {
         'type': 'separator',
         'section': 'device',
-        'camera': True,
-        'advanced': True
+        'camera': True
     }
 
  
@@ -978,7 +995,6 @@ def seExposure():
         'type': 'choices',
         'choices': EXPOSURE_CHOICES,
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -1003,7 +1019,6 @@ def seEv():
         'decimals': 0,
         'unit': '',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -1023,7 +1038,6 @@ def seAwb():
         'type': 'choices',
         'choices': AWB_CHOICES,
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -1043,7 +1057,6 @@ def seMetering():
         'type': 'choices',
         'choices': METERING_CHOICES,
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -1063,7 +1076,6 @@ def seDrc():
         'type': 'choices',
         'choices': DRC_CHOICES,
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -1082,7 +1094,6 @@ def seVstab():
         'description': 'enables or disables video stabilization for this camera',
         'type': 'bool',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -1101,7 +1112,6 @@ def seDenoise():
         'description': 'enables image denoising',
         'type': 'bool',
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
@@ -1121,11 +1131,29 @@ def seImxfx():
         'type': 'choices',
         'choices': IMXFX_CHOICES,
         'section': 'device',
-        'advanced': True,
         'camera': True,
         'required': True,
         'get': _get_raspimjpeg_settings,
         'set': _set_raspimjpeg_settings,
+        'get_set_dict': True
+    }
+
+
+@additional_config
+def seProto():
+    if not _get_streameye_enabled():
+        return None
+
+    return {
+        'label': 'Streaming Protocol',
+        'description': 'the desired streaming protocol (keep in mind that RTSP is experimental)',
+        'type': 'choices',
+        'choices': PROTO_CHOICES,
+        'section': 'streaming',
+        'camera': True,
+        'required': True,
+        'get': _get_streameye_settings,
+        'set': _set_streameye_settings,
         'get_set_dict': True
     }
 
@@ -1139,12 +1167,33 @@ def sePort():
         'label': 'Streaming Port',
         'description': 'sets the TCP port on which the webcam streaming server listens',
         'type': 'number',
-        'min': 1024,
+        'min': 0,
         'max': 65535,
         'section': 'streaming',
-        'advanced': True,
         'camera': True,
         'required': True,
+        'depends': ['seProto==mjpeg'],
+        'get': _get_streameye_settings,
+        'set': _set_streameye_settings,
+        'get_set_dict': True
+    }
+
+
+@additional_config
+def seRTSPPort():
+    if not _get_streameye_enabled():
+        return None
+
+    return {
+        'label': 'Streaming Port',
+        'description': 'sets the TCP port on which the webcam streaming server listens',
+        'type': 'number',
+        'min': 0,
+        'max': 65535,
+        'section': 'streaming',
+        'camera': True,
+        'required': True,
+        'depends': ['seProto==rtsp'],
         'get': _get_streameye_settings,
         'set': _set_streameye_settings,
         'get_set_dict': True
@@ -1162,9 +1211,9 @@ def seAuthMode():
         'type': 'choices',
         'choices': AUTH_CHOICES,
         'section': 'streaming',
-        'advanced': True,
         'camera': True,
         'required': True,
+        'depends': ['seProto==mjpeg'],
         'get': _get_streameye_settings,
         'set': _set_streameye_settings,
         'get_set_dict': True
